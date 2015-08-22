@@ -17,17 +17,13 @@ test <- function(conn) {
   gp_sum  <- h2o.group_by(data = df.hex, by = "RACE", order.by = "RACE", sum("VOL"))
   Log.info("Test method = mean ...")
   gp_mean <- h2o.group_by(data = df.hex, by = "RACE", order.by = "RACE", mean("VOL"))
-  Log.info("Test method = median ...")
-  gp_median <- h2o.group_by(data = df.hex, by = "RACE", order.by = "RACE", median("VOL"))
-  Log.info("Test method = mode ...")
+#   Method = median is not supported
+#   Log.info("Test method = median ...")
+#   gp_median <- h2o.group_by(data = df.hex, by = "RACE", order.by = "RACE", median("VOL"))
+  Log.info("Test method = most ...")
   df.hex[, "AGE"] <- as.factor(df.hex[, "AGE"])
-  gp_mode <- h2o.group_by(data = df.hex, by = "RACE", order.by = "RACE", mode("AGE"))
+  gp_most <- h2o.group_by(data = df.hex, by = "RACE", order.by = "RACE", mode("AGE"))
   
-  
-#   Log.info("Test method = nrow, sum, mean, median, and mode  for the dataset...")
-#   df.hex[, "AGE"] <- as.factor(df.hex[, "AGE"])
-#   groupby <- h2o.group_by(data = df.hex, by = "RACE",  order.by = "RACE",
-#                            nrow("ID"), sum("VOL"), mean("GLEASON"), median("DPROS"), mode("AGE"))  
   testEnd()
 }
 

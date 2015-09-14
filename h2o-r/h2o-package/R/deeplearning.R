@@ -93,7 +93,7 @@
 #' @param sparsity_beta Sparsity regularization (Experimental)
 #' @param max_categorical_features Max. number of categorical features, enforced via hashing
 #'        Experimental)
-#' @param reproducible Force reproducibility on small data (will be slow - only uses 1 thread)
+#' @param reproducible Force reproducibility on small data (requires setting the \code{seed} argument and this will be slow - only uses 1 thread)
 #' @param export_weights_and_biases Whether to export Neural Network weights and biases to H2O
 #'        Frames"
 #' @param offset_column Specify the offset column.
@@ -203,9 +203,9 @@ h2o.deeplearning <- function(x, y, training_frame,
   parms <- list()
   parms$training_frame <- training_frame
   args <- .verify_dataxy(training_frame, x, y, autoencoder)
-  if( !missing(offset_column) )  args$x_ignore <- args$x_ignore[!( offset_column == args$x_ignore )]
-  if( !missing(weights_column) ) args$x_ignore <- args$x_ignore[!( weights_column == args$x_ignore )]
-  if( !missing(fold_column) ) args$x_ignore <- args$x_ignore[!( fold_column == args$x_ignore )]
+  if( !missing(offset_column) && !is.null(offset_column))  args$x_ignore <- args$x_ignore[!( offset_column == args$x_ignore )]
+  if( !missing(weights_column) && !is.null(weights_column)) args$x_ignore <- args$x_ignore[!( weights_column == args$x_ignore )]
+  if( !missing(fold_column) && !is.null(fold_column)) args$x_ignore <- args$x_ignore[!( fold_column == args$x_ignore )]
   parms$response_column <- args$y
   parms$ignored_columns <- args$x_ignore
   if(!missing(model_id))
@@ -344,8 +344,9 @@ h2o.deeplearning <- function(x, y, training_frame,
 #' @param object An \linkS4class{H2OAutoEncoderModel} object that represents the
 #'        model to be used for anomaly detection.
 #' @param data An \linkS4class{H2OFrame} object.
+#' @param per_feature Whether to return the per-feature squared reconstruction error
 #' @return Returns an \linkS4class{H2OFrame} object containing the
-#'         reconstruction MSE.
+#'         reconstruction MSE or the per-feature squared error.
 #' @seealso \code{\link{h2o.deeplearning}} for making an H2OAutoEncoderModel.
 #' @examples
 #' \donttest{
@@ -357,11 +358,13 @@ h2o.deeplearning <- function(x, y, training_frame,
 #'                                hidden = c(10, 10), epochs = 5)
 #' prostate.anon = h2o.anomaly(prostate.dl, prostate.hex)
 #' head(prostate.anon)
+#' prostate.anon.per.feature = h2o.anomaly(prostate.dl, prostate.hex, per_feature=T)
+#' head(prostate.anon.per.feature)
 #' }
 #' @export
-h2o.anomaly <- function(object, data) {
+h2o.anomaly <- function(object, data, per_feature=FALSE) {
   url <- paste0('Predictions/models/', object@model_id, '/frames/', data@frame_id)
-  res <- .h2o.__remoteSend(object@conn, url, method = "POST", reconstruction_error=TRUE)
+  res <- .h2o.__remoteSend(object@conn, url, method = "POST", reconstruction_error=TRUE, reconstruction_error_per_feature=per_feature)
   key <- res$model_metrics[[1L]]$predictions$frame_id$name
 
   h2o.getFrame(key)

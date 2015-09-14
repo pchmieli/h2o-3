@@ -123,9 +123,9 @@ MAIN_LOOP:
               }
             }
           }
-          if (!isNa)
+          if (!isNa) {
             dout.addStrCol(colIdx, str);
-          else {
+          } else {
             dout.addInvalidCol(colIdx);
             isNa = false;
           }

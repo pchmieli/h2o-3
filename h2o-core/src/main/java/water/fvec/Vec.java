@@ -188,7 +188,7 @@ public class Vec extends Keyed<Vec> {
   public static final String[] TYPE_STR=new String[] { "BAD", "UUID", "String", "Numeric", "Enum", "Time", "Time", "Time"};
 
   public static final boolean DO_HISTOGRAMS = true;
-  public static final boolean NO_HISTOGRAMS = false;
+  final private Key _rollupStatsKey;
 
   /** True if this is an Categorical column.  All enum columns are also {@link #isInt}, but
    *  not vice-versa.
@@ -240,6 +240,7 @@ public class Vec extends Keyed<Vec> {
     _type = type;
     _espc = espc;
     _domain = domain;
+    _rollupStatsKey = chunkKey(-2);
   }
 
   /** Number of elements in the vector; returned as a {@code long} instead of
@@ -557,19 +558,6 @@ public class Vec extends Keyed<Vec> {
     return randVec;
   }
 
-  /** Make a new vector initialized to Gaussian random numbers with the given seed */
-  public Vec makeGaus( final long seed ) {
-    Vec gausVec = makeZero();
-    new MRTask() {
-      @Override public void map(Chunk c){
-        Random rng = RandomUtils.getRNG(seed * (c.cidx() + 1));
-        for(int i = 0; i < c._len; ++i)
-          c.set(i, rng.nextGaussian());
-      }
-    }.doAll(gausVec);
-    return gausVec;
-  }
-
   // ======= Rollup Stats ======
 
   /** Vec's minimum value 
@@ -577,13 +565,13 @@ public class Vec extends Keyed<Vec> {
   public double min()  { return mins()[0]; }
   /** Vec's 5 smallest values 
    *  @return Vec's 5 smallest values */
-  public double[]mins(){ return rollupStats()._mins; }
+  public double[] mins(){ return rollupStats()._mins; }
   /** Vec's maximum value 
    *  @return Vec's maximum value */
   public double max()  { return maxs()[0]; }
   /** Vec's 5 largest values 
    *  @return Vec's 5 largeest values */
-  public double[]maxs(){ return rollupStats()._maxs; }
+  public double[] maxs(){ return rollupStats()._maxs; }
   /** True if the column contains only a constant value and it is not full of NAs 
    *  @return True if the column is constant */
   public final boolean isConst() { return min() == max(); }
@@ -596,6 +584,13 @@ public class Vec extends Keyed<Vec> {
   /** Vecs's standard deviation
    *  @return Vec's standard deviation */
   public double sigma(){ return rollupStats()._sigma; }
+  /** Vecs's mode
+   * @return Vec's mode */
+  public int mode() {
+    if (!isEnum()) throw H2O.unimpl();
+    long[] bins = bins();
+    return ArrayUtils.maxIndex(bins);
+  }
   /** Count of missing elements
    *  @return Count of missing elements */
   public long  naCnt() { return rollupStats()._naCnt; }
@@ -745,7 +740,7 @@ public class Vec extends Keyed<Vec> {
     UnsafeUtils.set4(bits,6,cidx); // chunk#
     return Key.make(bits);
   }
-  Key rollupStatsKey() { return chunkKey(-2); }
+  Key rollupStatsKey() { return _rollupStatsKey; }
 
   /** Get a Chunk's Value by index.  Basically the index-to-key map, plus the
    *  {@code DKV.get()}.  Warning: this pulls the data locally; using this call
@@ -828,19 +823,10 @@ public class Vec extends Keyed<Vec> {
     return c;
   }
 
-  /** The Chunk for a row#.  Warning: this loads the data locally!  */
-  private Chunk chunkForRow_impl(long i) { return chunkForChunkIdx(elem2ChunkIdx(i)); }
-
-  // Cache of last Chunk accessed via at/set api
-  transient Chunk _cache;
-
   /** The Chunk for a row#.  Warning: this pulls the data locally; using this
    *  call on every Chunk index on the same node will probably trigger an OOM!
    *  @return Chunk for a row# */
-  public final Chunk chunkForRow(long i) {
-    Chunk c = _cache;
-    return (c != null && c.chk2()==null && c._start <= i && i < c._start+ c._len) ? c : (_cache = chunkForRow_impl(i));
-  }
+  public final Chunk chunkForRow(long i) { return chunkForChunkIdx(elem2ChunkIdx(i)); }
 
   // ======= Direct Data Accessors ======
 
@@ -872,6 +858,28 @@ public class Vec extends Keyed<Vec> {
    *  @return {@code i}th element as {@link ValueString} or null if missing, or
    *  throw if not a String */
   public final ValueString atStr( ValueString vstr, long i ) { return chunkForRow(i).atStr_abs(vstr, i); }
+
+  /** A more efficient way to read randomly to a Vec - still single-threaded,
+   *  but much faster than Vec.at(i).  Limited to single-threaded
+   *  single-machine reads.
+   *
+   * Usage:
+   * Vec.Reader vr = vec.new Reader();
+   * x = vr.at(0);
+   * y = vr.at(1);
+   * z = vr.at(2);
+   */
+  public final class Reader {
+    private Chunk _cache;
+    private Chunk chk(long i) {
+      Chunk c = _cache;
+      return (c != null && c.chk2()==null && c._start <= i && i < c._start+ c._len) ? c : (_cache = chunkForRow(i));
+    }
+    public final long    at8( long i ) { return chk(i). at8_abs(i); }
+    public final double   at( long i ) { return chk(i).  at_abs(i); }
+    public final boolean isNA(long i ) { return chk(i).isNA_abs(i); }
+    public final long length() { return Vec.this.length(); }
+  }
 
   /** Write element the slow way, as a long.  There is no way to write a
    *  missing value with this call.  Under rare circumstances this can throw:
@@ -920,27 +928,31 @@ public class Vec extends Keyed<Vec> {
    *  single-machine writes.
    *
    * Usage:
-   * Vec.Writer vw = vec.open();
-   * vw.set(0, 3.32);
-   * vw.set(1, 4.32);
-   * vw.set(2, 5.32);
-   * vw.close();
+   * try( Vec.Writer vw = vec.open() ) {
+   *   vw.set(0, 3.32);
+   *   vw.set(1, 4.32);
+   *   vw.set(2, 5.32);
+   * }
    */
-  public final static class Writer implements java.io.Closeable {
-    final Vec _vec;
-    private Writer(Vec v) { (_vec=v).preWriting(); }
-    public final void set( long i, long   l) { _vec.chunkForRow(i).set_abs(i, l); }
-    public final void set( long i, double d) { _vec.chunkForRow(i).set_abs(i, d); }
-    public final void set( long i, float  f) { _vec.chunkForRow(i).set_abs(i, f); }
-    public final void setNA( long i        ) { _vec.chunkForRow(i).setNA_abs(i); }
-    public final void set( long i, String str) { _vec.chunkForRow(i).set_abs(i, str); }
-    public Futures close(Futures fs) { return _vec.postWrite(_vec.closeLocal(fs)); }
+  public final class Writer implements java.io.Closeable {
+    private Chunk _cache;
+    private Chunk chk(long i) {
+      Chunk c = _cache;
+      return (c != null && c.chk2()==null && c._start <= i && i < c._start+ c._len) ? c : (_cache = chunkForRow(i));
+    }
+    private Writer() { preWriting(); }
+    public final void set( long i, long   l) { chk(i).set_abs(i, l); }
+    public final void set( long i, double d) { chk(i).set_abs(i, d); }
+    public final void set( long i, float  f) { chk(i).set_abs(i, f); }
+    public final void setNA( long i        ) { chk(i).setNA_abs(i); }
+    public final void set( long i,String str){ chk(i).set_abs(i, str); }
+    public Futures close(Futures fs) { return postWrite(closeLocal(fs)); }
     public void close() { close(new Futures()).blockForPending(); }
   }
 
   /** Create a writer for bulk serial writes into this Vec.
    *  @return A Writer for bulk serial writes */
-  public final Writer open() { return new Writer(this); }
+  public final Writer open() { return new Writer(); }
 
   /** Close all chunks that are local (not just the ones that are homed)
    *  This should only be called from a Writer object */
@@ -1050,8 +1062,8 @@ public class Vec extends Keyed<Vec> {
     int min = (int) min(), max = (int) max();
     // try to do the fast domain collection
     long dom[] = (min >= 0 && max < Integer.MAX_VALUE - 4) ? new CollectDomainFast(max).doAll(this).domain() : new CollectDomain().doAll(this).domain();
-    if (dom.length > Categorical.MAX_ENUM_SIZE)
-      throw new IllegalArgumentException("Column domain is too large to be represented as an enum: " + dom.length + " > " + Categorical.MAX_ENUM_SIZE);
+    if (dom.length > Categorical.MAX_CATEGORICAL_COUNT)
+      throw new IllegalArgumentException("Column domain is too large to be represented as an enum: " + dom.length + " > " + Categorical.MAX_CATEGORICAL_COUNT);
     return copyOver(dom);
   }
 
@@ -1094,7 +1106,7 @@ public class Vec extends Keyed<Vec> {
     boolean useDomain=false;
     Vec newVec = copyOver(null);
     try {
-      int ignored = Integer.parseInt(this._domain[0]);
+      Integer.parseInt(this._domain[0]);
       useDomain=true;
     } catch (NumberFormatException e) {
       // makeCopy and return...
@@ -1309,7 +1321,7 @@ public class Vec extends Keyed<Vec> {
     }
     /** Task to atomically add vectors into existing group.
      *  @author tomasnykodym   */
-    private static class AddVecs2GroupTsk extends TAtomic<VectorGroup>{
+    private final static class AddVecs2GroupTsk extends TAtomic<VectorGroup>{
       final Key _key;
       int _n;          // INPUT: Keys to allocate; OUTPUT: start of run of keys
       private AddVecs2GroupTsk(Key key, int n){_key = key; _n = n;}
@@ -1336,7 +1348,7 @@ public class Vec extends Keyed<Vec> {
      * Task to atomically add vectors into existing group.
      * @author tomasnykodym
      */
-    private static class ReturnKeysTsk extends TAtomic<VectorGroup>{
+    private final static class ReturnKeysTsk extends TAtomic<VectorGroup>{
       final int _newCnt;          // INPUT: Keys to allocate; OUTPUT: start of run of keys
       final int _oldCnt;
       private ReturnKeysTsk(int oldCnt, int newCnt){_newCnt = newCnt; _oldCnt = oldCnt;}

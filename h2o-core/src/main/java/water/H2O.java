@@ -474,6 +474,18 @@ final public class H2O {
     embeddedH2OConfig.notifyAboutCloudSize(ip, port, size);
   }
 
+
+  public static void closeAll() {
+    try { NetworkInit._udpSocket.close(); } catch( IOException ignore ) { }
+    try { H2O.getJetty().stop(); } catch( Exception ignore ) { }
+    try { NetworkInit._tcpSocketBig.close(); } catch( IOException ignore ) { }
+    if(!H2O.ARGS.useUDP)
+      try { NetworkInit._tcpSocketSmall.close(); } catch( IOException ignore ) { }
+    PersistManager PM = H2O.getPM();
+    if( PM != null ) PM.getIce().cleanUp();
+  }
+
+
   /** Notify embedding software instance H2O wants to exit.  Shuts down a single Node.
    *  @param status H2O's requested process exit value.
    */
@@ -995,7 +1007,7 @@ final public class H2O {
       } catch( Throwable ex ) {
         // If the higher priority job popped an exception, complete it
         // exceptionally...  but then carry on and do the lower priority job.
-        if( h2o != null ) h2o.onExceptionalCompletion(ex, h2o.getCompleter());
+        if( h2o != null ) h2o.completeExceptionally(ex);
         else ex.printStackTrace();
       } finally {
         t._priority = pp;
@@ -1229,7 +1241,8 @@ final public class H2O {
     // Start the UDPReceiverThread, to listen for requests from other Cloud
     // Nodes. There should be only 1 of these, and it never shuts down.
     // Started first, so we can start parsing UDP packets
-    new UDPReceiverThread().start();
+    if(H2O.ARGS.useUDP)
+      new UDPReceiverThread().start();
 
     // Start the MultiReceiverThread, to listen for multi-cast requests from
     // other Cloud Nodes. There should be only 1 of these, and it never shuts
@@ -1612,7 +1625,6 @@ final public class H2O {
     // Initialize NPS
     {
       String flow_dir;
-      URI flow_uri = null;
 
       if (ARGS.flow_dir != null) {
         flow_dir = ARGS.flow_dir;
@@ -1624,18 +1636,12 @@ final public class H2O {
       if (flow_dir != null) {
         flow_dir = flow_dir.replace("\\", "/");
         Log.info("Flow dir: '" + flow_dir + "'");
-
-        try {
-          flow_uri = new URI(flow_dir);
-        } catch (Exception e) {
-          throw new RuntimeException("Invalid flow_dir: " + flow_dir + ", " + e.getMessage());
-        }
       }
       else {
         Log.info("Flow dir is undefined; saving flows not available");
       }
 
-      NPS = new NodePersistentStorage(flow_uri);
+      NPS = new NodePersistentStorage(flow_dir);
     }
 
     // Start network services, including heartbeats

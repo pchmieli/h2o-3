@@ -413,7 +413,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
       for(String s:warns) warn("_validation_frame",s);
       final Submodel nullSm = new Submodel(_parms._lambda[0], _bc._betaStart, 0, itsk._gtNull._val.explainedDev(),itsk._gtNullTest != null?itsk._gtNullTest._val.residualDeviance():Double.NaN);
       _model.setSubmodel(nullSm);
-
+      _model._output.setSubmodelIdx(0);
       _model._output._training_metrics = itsk._gtNull._val.makeModelMetrics(_model,_parms.train());
       if(_valid != null)
         _model._output._validation_metrics = itsk._gtNullTest._val.makeModelMetrics(_model,_parms.valid());
@@ -845,6 +845,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
    *
    */
   public final class GLMSingleLambdaTsk extends DTask<GLMSingleLambdaTsk> {
+    private static final int CD_MAX_ITERATIONS = 100;
     DataInfo _activeData;
     GLMTaskInfo _taskInfo;
     long _start_time;
@@ -1039,7 +1040,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
             int iter1 = 0;
 
             // coordinate descent loop
-            while (iter1++ < 300) {
+            while (iter1++ < CD_MAX_ITERATIONS) {
               Frame fr2 = new Frame();
               fr2.add("w", w);
               fr2.add("z", z);
@@ -1207,7 +1208,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
             long startTimeCd = System.currentTimeMillis();
             double [][] XX = gt._gram.getXX();
             // CD loop
-            while (iter1++ < 300) {
+            while (iter1++ < CD_MAX_ITERATIONS) {
 
               for(int i=0; i < _activeData._cats; ++i) {
                 int level_num = _activeData._catOffsets[i+1]-_activeData._catOffsets[i];
@@ -1405,7 +1406,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
                     // latest is the best
                     _model._output._training_metrics = gt1._val.makeModelMetrics(_model,_parms.train());
                     _model._output._validation_metrics = gt2._val.makeModelMetrics(_model,_parms.valid());
-                    if(_parms._family == Family.binomial)
+                    if(_parms._family == Family.binomial && gt2._nobs > 0)
                       _model._output._threshold = ((ModelMetricsBinomial)_model._output._validation_metrics)._auc.defaultThreshold();
                   }
                   _model.generateSummary(_parms._train, _taskInfo._iter);

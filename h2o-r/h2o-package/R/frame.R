@@ -346,7 +346,7 @@ h2o.splitFrame <- function(data, ratios = 0.75, destination_frames) {
 }
 
 #'
-#' Filter NA Coluns
+#' Filter NA Columns
 #'
 #' @param data A dataset to filter on.
 #' @param frac The threshold of NAs to allow per column (columns >= this threshold are filtered)
@@ -418,7 +418,7 @@ h2o.table <- function(x, y = NULL) {
 
 #' H2O Median
 #'
-#' Compute the airthmetic mean of a \linkS4class{H2OFrame}.
+#' Compute the arithmetic mean of a \linkS4class{H2OFrame}.
 #'
 #' @param x An \linkS4class{H2OFrame} object.
 #' @param na.rm a logical, indicating whether na's are omitted.
@@ -531,27 +531,36 @@ setMethod("%in%", signature("H2OFrame", "numeric"), function(x, table) h2o.match
 #' @export
 setMethod("na.omit", "H2OFrame", function(object, ...) .h2o.nary_frame_op("na.omit", object) )
 
-#' Compute FFT of an H2OFrame
+#' Compute DCT of an H2OFrame
 #'
-#' Compute the Discrete Fast Fourier Transform of every row in the H2OFrame
+#' Compute the Discrete Cosine Transform of every row in the H2OFrame
 #'
 #' @param data An \linkS4class{H2OFrame} object representing the dataset to transform
 #' @param destination_frame A frame ID for the result
-#' @param dimensions An array containing the 3 integer values for length, width, depth of each sample.
-#'        The product of LxWxD must total up to less than the number of columns. For 1D FFT, use c(L,1,1).
-#' @param inverse Whether to perform the inverse Fourier transform
+#' @param dimensions An array containing the 3 integer values for height, width, depth of each sample.
+#'        The product of HxWxD must total up to less than the number of columns.
+#'        For 1D, use c(L,1,1), for 2D, use C(N,M,1).
+#' @param inverse Whether to perform the inverse transform
 #' @examples
 #' \donttest{
 #'   library(h2o)
 #'   localH2O = h2o.init()
-#'   df <- h2o.createFrame(localH2O, rows = 10000, cols = 1024,
+#'   df <- h2o.createFrame(localH2O, rows = 1000, cols = 8*16*24,
 #'                         categorical_fraction = 0, integer_fraction = 0, missing_fraction = 0)
-#'   df1 <- h2o.fft(data=df,dimensions=c(1024,1,1),destination_frame="df1",inverse=FALSE)
-#'   df2 <- h2o.fft(data=df1,dimensions=c(1024,1,1),destination_frame="df2",inverse=TRUE)
+#'   df1 <- h2o.dct(data=df, dimensions=c(8*16*24,1,1))
+#'   df2 <- h2o.dct(data=df1,dimensions=c(8*16*24,1,1),inverse=TRUE)
+#'   max(abs(df1-df2))
+#'
+#'   df1 <- h2o.dct(data=df, dimensions=c(8*16,24,1))
+#'   df2 <- h2o.dct(data=df1,dimensions=c(8*16,24,1),inverse=TRUE)
+#'   max(abs(df1-df2))
+#'
+#'   df1 <- h2o.dct(data=df, dimensions=c(8,16,24))
+#'   df2 <- h2o.dct(data=df1,dimensions=c(8,16,24),inverse=TRUE)
 #'   max(abs(df1-df2))
 #' }
 #' @export
-h2o.fft <- function(data, destination_frame, dimensions, inverse=F) {
+h2o.dct <- function(data, destination_frame, dimensions, inverse=F) {
   if(!is(data, "H2OFrame")) stop("`data` must be an H2OFrame object")
   ## -- Force evaluate temporary ASTs -- ##
   delete <- !.is.eval(data)
@@ -567,7 +576,7 @@ h2o.fft <- function(data, destination_frame, dimensions, inverse=F) {
     params$destination_frame <- destination_frame
   params$inverse <- inverse
 
-  res <- .h2o.__remoteSend(data@conn, method="POST", h2oRestApiVersion = 99, "FFTTransformer", .params = params)
+  res <- .h2o.__remoteSend(data@conn, method="POST", h2oRestApiVersion = 99, "DCTTransformer", .params = params)
   job_key <- res$key$name
   .h2o.__waitOnJob(data@conn, job_key)
 
@@ -600,8 +609,8 @@ h2o.year <- function(x){
 
 #' Convert Milliseconds to Months in H2O Datasets
 #'
-#' Converts the entries of a \linkS4class{H2OFrame} object from milliseconds to months (on a 0 to
-#' 11 scale).
+#' Converts the entries of a \linkS4class{H2OFrame} object from milliseconds to months (on a 1 to
+#' 12 scale).
 #'
 #' @param x An \linkS4class{H2OFrame} object.
 #' @return A \linkS4class{H2OFrame} object containing the entries of \code{x} converted to months of
@@ -773,7 +782,7 @@ h2o.listTimezones <- function(conn=h2o.getConnection()) {
 #  .newH2OFrame("H2OFrame", conn=x@conn, frame_id=res$dest_key, logic=FALSE, finalizers=x@finalizers)
 #}
 
-#' Produe a Vector of Random Uniform Numbers
+#' Produce a Vector of Random Uniform Numbers
 #'
 #' Creates a vector of random uniform numbers equal in length to the length of the specified H2O
 #' dataset.
@@ -1085,10 +1094,10 @@ setMethod("$<-", "H2OFrame", function(x, name, value) {
     if (is(value, "H2OFrame")) {
       finalizers <- c(finalizers, value@finalizers)
       rhs <- .get(value)
-    } else if (is.numeric(value))
+    } else if (is.numeric(value) || is.integer(value) || typeof(value)=="integer" )
       rhs <- .eval(substitute(value), parent.frame(), FALSE)
     else
-      stop("`value` can only be an H2OFrame object, numeric or NULL")
+      stop(paste0("`value` can only be an H2OFrame object, numeric or NULL. Got: ", typeof(value), ": ", value))
 
     ast <- new("ASTNode", root = new("ASTApply", op = "="), children = list(lhs, rhs))
     res <- .h2o.replace.frame(conn = x@conn, ast = ast, frame_id = x@frame_id, finalizers = finalizers)
@@ -1601,7 +1610,14 @@ setMethod("summary", "H2OFrame", function(object, factors=6L, ...) {
     } else if( col.type == "enum" ) {
       domains <- col.sum$domain
       domain.cnts <- col.sum$histogram_bins
-      if( length(domain.cnts) < length(domains) ) domain.cnts <- c(domain.cnts, rep(NA, length(domains) - length(domain.cnts)))
+      if( length(domain.cnts) < length(domains) ) {
+        if( length(domain.cnts) == 1 )  {   # Constant categorical column
+          cnt <- domain.cnts[1]
+          domain.cnts <- rep(NA, length(domains))
+          domain.cnts[col.sum$mean+1] <- cnt
+        } else
+          domain.cnts <- c(domain.cnts, rep(NA, length(domains) - length(domain.cnts)))
+      }
       missing.count <- 0L
       if( !is.null(col.sum$missing_count) && col.sum$missing_count > 0L ) missing.count <- col.sum$missing_count    # set the missing count
       # create a dataframe of the counts and factor levels, then sort in descending order (most frequent levels at the top)
@@ -1829,6 +1845,7 @@ as.h2o <- function(object, conn = h2o.getConnection(), destination_frame= "") {
     object <- as.data.frame(object)
   }
   types <- sapply(object, class)
+  types <- gsub("integer64", "numeric", types)
   types <- gsub("integer", "numeric", types)
   types <- gsub("double", "numeric", types)
   types <- gsub("complex", "numeric", types)
@@ -1893,7 +1910,7 @@ as.data.frame.H2OFrame <- function(x, ...) {
   }
 
   # Substitute NAs for blank cells rather than skipping
-  df <- read.csv((tcon <- textConnection(ttt)), blank.lines.skip = FALSE, ...)
+  df <- read.csv((tcon <- textConnection(ttt)), blank.lines.skip = FALSE, na.strings = "", ...)
   # df <- read.csv(textConnection(ttt), blank.lines.skip = FALSE, colClasses = colClasses, ...)
   close(tcon)
   df
@@ -2588,7 +2605,7 @@ h2o.vote  <- function(x, nclasses, weights=rep(0,ncol(x))) { .h2o.nary_frame_op(
 # TODO: Cleanup the cruft!
 #' Split H2O Dataset, Apply Function, and Return Results
 #'
-#' For each subset of an H2O data set, apply a user-specified function, then comine the results.
+#' For each subset of an H2O data set, apply a user-specified function, then combine the results.  This is an experimental feature.
 #'
 #' @param .data An \linkS4class{H2OFrame} object to be processed.
 #' @param .variables Variables to split \code{.data} by, either the indices or names of a set of columns.
@@ -2870,7 +2887,7 @@ setMethod("sapply", "H2OFrame", function(X, FUN, ...) {
 })
 
 #'
-#' Compute A Histgram
+#' Compute A Histogram
 #'
 #' Compute a histogram over a numeric column. If breaks=="FD", the MAD is used over the IQR
 #' in computing bin width. Note that we do not beautify the breakpoints as R does.
@@ -3004,3 +3021,32 @@ h2o.trim <- function(x) { .h2o.nary_frame_op("trim", x) }
 ##   })
 ##   list.of.bins
 ## })
+
+#
+# Force evaluation of given frame
+# if it is necessary.
+#
+.h2o.evalFrame <- function(frame) {
+  mktmp <- !.is.eval(frame)
+  if (mktmp) {
+    .h2o.eval.frame(conn=h2o.getConnection(), ast=frame@mutable$ast, frame_id=frame@frame_id)
+  }
+}
+
+#
+# Check and evaluate given frame if it is necassary.
+# Returns frame.
+#
+.h2o.checkFrameParam <- function(frame, param_name) {
+  if (!inherits(frame, "H2OFrame")) {
+   tryCatch(frame <- h2o.getFrame(frame),
+            error = function(err) {
+              stop(cat("argument \"", param_name, "\" must be a valid H2OFrame or frame ID"))
+            })
+  } else {
+    # Force AST evaluation
+    .h2o.evalFrame(frame)
+  }
+  frame
+}
+

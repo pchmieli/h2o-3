@@ -1,16 +1,37 @@
 # -*- coding: utf-8 -*-
 # import numpy    no numpy cuz windoz
-import collections, csv, itertools, os, re, tempfile, uuid, urllib2, sys, urllib,imp,copy
+import collections, csv, itertools, os, re, tempfile, uuid, urllib2, sys, urllib,imp,copy,weakref
 from expr import h2o,ExprNode
 import gc
 from group_by import GroupBy
 
 
-class H2OFrame:
+# TODO: Automatically convert column names into Frame properties!
+
+
+class H2OFrameWeakRefMixin:
+  __refs__ = collections.defaultdict(list)
+  def __init__(self):
+    self.__refs__[self.__class__].append(weakref.ref(self))
+
+  @classmethod
+  def get_instance_ids(cls):
+    for inst_ref in cls.__refs__[cls]:
+      inst = inst_ref()
+      if inst is not None:
+        yield inst._id
+
+  @classmethod
+  def drop_instance(cls, inst):
+    cls.__refs__[cls].remove(weakref.ref(inst))
+
+class H2OFrame(H2OFrameWeakRefMixin):
 
   # Magical count-of-5:   (get 2 more when looking at it in debug mode)
   #  2 for _do_it frame, 2 for _do_it local dictionary list, 1 for parent
   MAGIC_REF_COUNT = 5 if sys.gettrace() is None else 7  # M = debug ? 7 : 5
+  COUNTING = True
+  dropped_instances = []  # keep track of dropped instances while not counting
 
   def __init__(self, python_obj=None, file_path=None, raw_id=None, expr=None):
     """
@@ -33,6 +54,7 @@ class H2OFrame:
     :param text_key: A raw key resulting from an upload_file.
     :return: An instance of an H2OFrame object.
     """
+    H2OFrameWeakRefMixin.__init__(self)
     self._id        = _py_tmp_key()  # gets overwritten if a parse happens
     self._keep      = False
     self._nrows     = None
@@ -316,6 +338,15 @@ class H2OFrame:
     """
     return copy.deepcopy(self._types)
 
+  @property
+  def frame_id(self):
+    """
+    Get the frame name.
+
+    :return: Get the name of this frame.
+    """
+    return self._id
+
   def unique(self):
     """
     Extract the unique values in the column.
@@ -333,7 +364,7 @@ class H2OFrame:
     """
     self.head(rows=10,cols=sys.maxint,show=True,as_pandas=as_pandas)  # all columns
 
-  def head(self, rows=10, cols=200, show=False, as_pandas=False):
+  def head(self, rows=10, cols=200, show=False, as_pandas=False): # TODO: add 1 to both HEAD and TAIL
     """
     Analgous to R's `head` call on a data.frame. Display a digestible chunk of the H2OFrame starting from the beginning.
 
@@ -348,7 +379,7 @@ class H2OFrame:
     ncols = min(self.ncol, cols)
     colnames = self.names[:ncols]
     head = self[0:nrows,0:ncols]
-    res = head.as_data_frame(as_pandas)[1:]
+    res = head.as_data_frame(as_pandas) if as_pandas else head.as_data_frame(as_pandas)[1:]
     if show: self._do_show(as_pandas,res,colnames)
     return res if as_pandas else head
 
@@ -367,6 +398,8 @@ class H2OFrame:
 
     :param rows: Number of rows to display.
     :param cols: Number of columns to display.
+    :param show:
+    :param as_pandas: 
     :return: None
     """
     self._eager()
@@ -419,8 +452,7 @@ class H2OFrame:
     Works on a single categorical vector. New domains must be aligned with the old domains. This call has SIDE
     EFFECTS and mutates the column in place (does not make a copy).
 
-    :param level: The level at which the column will be set (a string)
-    :param x: A single categorical column.
+    
     :param levels: A list of strings specifying the new levels. The number of new levels must match the number of
     old levels.
     :return: None
@@ -476,6 +508,7 @@ class H2OFrame:
   def summary(self):
     """
     Generate summary of the frame on a per-Vec basis.
+
     :return: None
     """
     self._eager()
@@ -540,12 +573,14 @@ class H2OFrame:
 
   def prod(self,na_rm=False):
     """
+    :param na_rm: True or False to remove NAs from computation.
     :return: The product of the column.
     """
     return H2OFrame(expr=ExprNode("prod",self,na_rm))._scalar()
 
   def any(self,na_rm=False):
     """
+    :param na_rm: True or False to remove NAs from computation.
     :return: True if any element is True in the column.
     """
     return H2OFrame(expr=ExprNode("any",self,na_rm))._scalar()
@@ -585,6 +620,48 @@ class H2OFrame:
       cols = [self._find_idx(col) for col in cols]
     cols = sorted(cols)
     return H2OFrame(expr=ExprNode("removeVecs",self,cols))._frame()
+
+  def kfold_column(self, n_folds=3, seed=-1):
+    """
+    Build a fold assignments column for cross-validation. This call will produce a column
+    having the same data layout as the calling object.
+
+    :param n_folds: Number of folds.
+    :param seed:Seed for random numbers (affects sampling when balance_classes=T)
+    :return: A column of fold IDs.
+    """
+    return H2OFrame(expr=ExprNode("kfold_column",self,n_folds,seed))._frame()
+
+  def modulo_kfold_column(self, n_folds=3):
+    """
+    Build a fold assignments column for cross-validation. Rows are assigned a fold according
+    to the current row number modulo n_folds.
+
+    Parameters
+    ----------
+      n_folds : int
+        The number of folds to build.
+
+    :return: An H2OFrame holding a single column of the fold assignments.
+    """
+    return H2OFrame(expr=ExprNode("modulo_kfold_column",self,n_folds))._frame()
+
+  def stratified_kfold_column(self, n_folds=3, seed=-1):
+    """
+    Build a fold assignment column with the constraint that each fold has the same class
+    distribution as the fold column.
+
+    Parameters
+    ----------
+      n_folds: int
+        The number of folds to build.
+      seed: int
+        A random seed.
+
+    :return: An H2OFrame holding a single column of the fold assignments.
+    """
+    return H2OFrame(expr=ExprNode("stratified_kfold_column",self,n_folds,seed))._frame()
+
 
   def structure(self):
     """
@@ -707,9 +784,23 @@ class H2OFrame:
   def __float__(self): return self._scalar()
 
   def __del__(self):
+    if not H2OFrame.COUNTING:
+      H2OFrame.dropped_instances.append(self._id)
+      return
     if not self._keep and self._computed: h2o.remove(self)
 
-  def keep(self): self._keep = True
+  @staticmethod
+  def del_dropped():
+    live_frames = list(H2OFrame.get_instance_ids())
+    dead_frames = H2OFrame.dropped_instances
+    for fr in dead_frames:
+      if fr not in live_frames:
+        h2o.remove(fr)
+    H2OFrame.dropped_instances = []
+
+  def keep(self):
+    self._keep = True
+    return self
 
   def drop(self, i):
     """
@@ -730,6 +821,7 @@ class H2OFrame:
     """
     if isinstance(i, basestring): i=self._find_idx(i)
     col = H2OFrame(expr=ExprNode("pop",self,i))._frame()
+    if self._keep: col.keep()
     self._update()
     return col
 
@@ -773,7 +865,6 @@ class H2OFrame:
     Split a frame into distinct subsets of size determined by the given ratios.
     The number of subsets is always 1 more than the number of ratios given.
 
-    :param data: The dataset to split.
     :param ratios: The fraction of rows for each split.
     :param destination_frames: names of the split frames
     :return: a list of frames
@@ -891,6 +982,7 @@ class H2OFrame:
 
   def sd(self, na_rm=False):
     """
+    :param na_rm: True or False to remove NAs from computation.
     :return: Standard deviation of the H2OVec elements.
     """
     return H2OFrame(expr=ExprNode("sd", self,na_rm))._scalar()
@@ -923,9 +1015,27 @@ class H2OFrame:
     """
     Split the strings in the target column on the given pattern
 
+    Parameters
+    ----------
+      pattern : str
+        The split pattern.
+
     :return: H2OFrame
     """
     return H2OFrame(expr=ExprNode("strsplit", self, pattern))
+
+  def countmatches(self, pattern):
+    """
+    Split the strings in the target column on the given pattern
+
+    Parameters
+    ----------
+      pattern : str
+        The pattern to count matches on in each string.
+
+    :return: H2OFrame
+    """
+    return H2OFrame(expr=ExprNode("countmatches", self, pattern))
 
   def trim(self):
     """
@@ -937,7 +1047,12 @@ class H2OFrame:
 
   def table(self, data2=None):
     """
-    :return: a frame of the counts at each combination of factor levels
+    Parameters
+    ----------
+      data2 : H2OFrame
+        Default is None, can be an optional single column to aggregate counts by.
+
+    :return: An H2OFrame of the counts at each combination of factor levels
     """
     return H2OFrame(expr=ExprNode("table",self,data2))
 
@@ -992,6 +1107,10 @@ class H2OFrame:
     sub and gsub perform replacement of the first and all matches respectively.
     Of note, mutates the frame.
 
+    :param pattern:
+    :param replacement:
+    :param ignore_case:
+
     :return: H2OFrame
     """
     return H2OFrame(expr=ExprNode("sub",pattern,replacement,self,ignore_case))
@@ -1000,6 +1119,10 @@ class H2OFrame:
     """
     sub and gsub perform replacement of the first and all matches respectively.
     Of note, mutates the frame.
+
+    :param pattern:
+    :param replacement:
+    :param ignore_case:
     :return: H2OFrame
     """
     return H2OFrame(expr=ExprNode("gsub", pattern, replacement, self, ignore_case))
@@ -1057,12 +1180,14 @@ class H2OFrame:
 
   def signif(self, digits=6):
     """
+    :param digits:
     :return: The rounded values in the H2OFrame to the specified number of significant digits.
     """
     return H2OFrame(expr=ExprNode("signif", self, digits))
 
   def round(self, digits=0):
     """
+    :param digits:
     :return: The rounded values in the H2OFrame to the specified number of decimal digits.
     """
     return H2OFrame(expr=ExprNode("round", self, digits))
@@ -1138,6 +1263,9 @@ class H2OFrame:
     """
     Makes a vector of the positions of (first) matches of its first argument in its second.
 
+    :param table:
+    :param nomatch:
+
     :return: bit H2OVec
     """
     return H2OFrame(expr=ExprNode("match", self, table, nomatch, None))
@@ -1164,7 +1292,7 @@ class H2OFrame:
       return [H2OFrame._get_scalar(r) for r in res]
   @staticmethod
   def _get_scalar(res):
-    if res[0] == []: return float("nan")
+    if res[0] == '': return float("nan")
     res = res[0][0]
     if res == "TRUE": return True
     if res == "FALSE":return False

@@ -480,7 +480,6 @@ public abstract class Chunk extends Iced implements Cloneable {
     if( _chk2 == null ) return fs;          // No change?
     if( _chk2 instanceof NewChunk ) _chk2 = ((NewChunk)_chk2).new_close();
     DKV.put(_vec.chunkKey(cidx),_chk2,fs,true); // Write updated chunk back into K/V
-    if( _vec._cache == this ) _vec._cache = null;
     return fs;
   }
 
@@ -561,11 +560,11 @@ public abstract class Chunk extends Iced implements Cloneable {
     return s;
   }
 
-
-
   /** Custom serializers implemented by Chunk subclasses: the _mem field
    *  contains ALL the fields already. */
-  abstract public AutoBuffer write_impl( AutoBuffer ab );
+  public AutoBuffer write_impl(AutoBuffer bb) {
+    return bb.putA1(_mem, _mem.length);
+  }
 
   /** Custom deserializers, implemented by Chunk subclasses: the _mem field
    *  contains ALL the fields already.  Init _start to -1, so we know we have
@@ -607,8 +606,8 @@ public abstract class Chunk extends Iced implements Cloneable {
 //  }
 
   /** Used by the parser to help report various internal bugs.  Not intended for public use. */
-  public final void reportBrokenEnum( int i, int j, long l, int[][] emap, int levels ) {
-    StringBuilder sb = new StringBuilder("Categorical renumber task, column # " + i + ": Found OOB index " + l + " (expected 0 - " + emap[i].length + ", global domain has " + levels + " levels) pulled from " + getClass().getSimpleName() +  "\n");
+  public final void reportBrokenEnum( int i, int j, long l, int[] emap, int levels ) {
+    StringBuilder sb = new StringBuilder("Categorical renumber task, column # " + i + ": Found OOB index " + l + " (expected 0 - " + emap.length + ", global domain has " + levels + " levels) pulled from " + getClass().getSimpleName() +  "\n");
     int k = 0;
     for(; k < Math.min(5,_len); ++k)
       sb.append("at8_abs[" + (k+_start) + "] = " + atd(k) + ", _chk2 = " + (_chk2 != null?_chk2.atd(k):"") + "\n");

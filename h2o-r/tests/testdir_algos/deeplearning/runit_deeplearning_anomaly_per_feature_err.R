@@ -82,5 +82,5 @@ check.deeplearning_anomaly_mse <- function(conn) {
   testEnd()
 }
 
-doTest("Deep Learning Anomaly Detection MNIST", check.deeplearning_anomaly)
+doTest("Deep Learning Anomaly Detection Per Feature Error", check.deeplearning_anomaly_mse)
 

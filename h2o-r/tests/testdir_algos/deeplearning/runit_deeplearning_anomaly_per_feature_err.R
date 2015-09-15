@@ -3,8 +3,7 @@ source('../../h2o-runit.R')
 
 check.deeplearning_anomaly_mse <- function(conn) {
   Log.info("Deep Learning Anomaly Detection on ECG Data)")
-  TRAIN <- "smalldata/anomaly/ecg_discord_train.csv"
-  TRAIN <- normalizePath(TRAIN)
+  TRAIN <- locate("smalldata/anomaly/ecg_discord_train.csv")
   
   ecg_original <- h2o.uploadFile(path = TRAIN, destination_frame = "ecg_original.hex")
   

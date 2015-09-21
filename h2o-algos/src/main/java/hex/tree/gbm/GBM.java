@@ -15,6 +15,7 @@ import water.fvec.Frame;
 import water.util.*;
 
 import java.util.Arrays;
+import java.util.Random;
 
 /** Gradient Boosted Trees
  *
@@ -133,6 +134,11 @@ public class GBM extends SharedTree<GBMModel,GBMModel.GBMParameters,GBMModel.GBM
   private class GBMDriver extends Driver {
 
     @Override protected void buildModel() {
+      _mtry = (_parms._mtries==-1) ? _ncols : _parms._mtries;
+      if (!(1 <= _mtry && _mtry <= _ncols)) throw new IllegalArgumentException("Computed mtry should be in interval <1,"+_ncols+"> but it is " + _mtry);
+      // Append number of trees participating in on-the-fly scoring
+      _train.add("OUT_BAG_TREES", _response.makeZero());
+
       if (hasOffsetCol() && _parms._distribution == Distribution.Family.bernoulli) {
         _initialPrediction = getInitialValueBernoulliOffset(_train);
       }
@@ -149,21 +155,30 @@ public class GBM extends SharedTree<GBMModel,GBMModel.GBMParameters,GBMModel.GBM
         }.doAll(vec_tree(_train, 0), _parms._build_tree_one_node); // Only setting tree-column 0
       }
 
+      // How many trees was in already in provided checkpointed model
+      int ntreesFromCheckpoint = _parms.hasCheckpoint() ?
+          ((SharedTreeModel.SharedTreeParameters) _parms._checkpoint.<SharedTreeModel>get()._parms)._ntrees : 0;
       // Reconstruct the working tree state from the checkpoint
       if( _parms.hasCheckpoint() ) {
         Timer t = new Timer();
-        new ResidualsCollector(_ncols, _nclass, numSpecialCols(),_model._output._treeKeys).doAll(_train, _parms._build_tree_one_node);
+        //new ResidualsCollector(_ncols, _nclass, numSpecialCols(),_model._output._treeKeys).doAll(_train, _parms._build_tree_one_node);
+        new OOBScorer(_ncols, _nclass, numSpecialCols(),_parms._sample_rate,_model._output._treeKeys).doAll(_train, _parms._build_tree_one_node);
         Log.info("Reconstructing tree residuals stats from checkpointed model took " + t);
       }
+
+      Random rand = createRNG(_parms._seed);
+      // To be deterministic get random numbers for previous trees and
+      // put random generator to the same state
+      for (int i = 0; i < ntreesFromCheckpoint; i++) rand.nextLong();
 
       // Loop over the K trees
       for( int tid=0; tid< _ntrees; tid++) {
         // During first iteration model contains 0 trees, then 1-tree, ...
         // No need to score a checkpoint with no extra trees added
         if( tid!=0 || !_parms.hasCheckpoint() ) { // do not make initial scoring if model already exist
-          double training_r2 = doScoringAndSaveModel(false, false, _parms._build_tree_one_node);
+          double training_r2 = doScoringAndSaveModel(false, true, _parms._build_tree_one_node);
           if( training_r2 >= _parms._r2_stopping ) {
-            doScoringAndSaveModel(true, false, _parms._build_tree_one_node);
+            doScoringAndSaveModel(true, true, _parms._build_tree_one_node);
             return;             // Stop when approaching round-off error
           }
         }
@@ -177,7 +192,7 @@ public class GBM extends SharedTree<GBMModel,GBMModel.GBMParameters,GBMModel.GBM
         // ESL2, page 387, Step 2b ii, iii, iv
         Timer kb_timer = new Timer();
 
-        buildNextKTrees();
+        buildNextKTrees(_train,_mtry,_parms._sample_rate,rand);
         Log.info((tid + 1) + ". tree was built in " + kb_timer.toString());
         GBM.this.update(1);
         if( !isRunning() ) return; // If canceled during building, do not bulkscore
@@ -374,7 +389,8 @@ public class GBM extends SharedTree<GBMModel,GBMModel.GBMParameters,GBMModel.GBM
     // --------------------------------------------------------------------------
     // Build the next k-trees, which is trying to correct the residual error from
     // the prior trees.  From ESL2, page 387.  Step 2b ii, iii.
-    private void buildNextKTrees() {
+//    private void buildNextKTrees() {
+    private void buildNextKTrees(Frame fr, int mtrys, float sample_rate, Random rand) {
       // We're going to build K (nclass) trees - each focused on correcting
       // errors for a single class.
       final DTree[] ktrees = new DTree[_nclass];
@@ -382,11 +398,20 @@ public class GBM extends SharedTree<GBMModel,GBMModel.GBMParameters,GBMModel.GBM
       // Define a "working set" of leaf splits, from here to tree._len
       int[] leafs = new int[_nclass];
 
+      // Sample - mark the lines by putting 'OUT_OF_BAG' into nid(<klass>) vector
+      Timer t_1 = new Timer();
+      Sample ss[] = new Sample[_nclass];
+      for( int k=0; k<_nclass; k++)
+        if (ktrees[k] != null) ss[k] = new Sample(ktrees[k], sample_rate).dfork(0,new Frame(vec_nids(fr,k),vec_resp(fr)), _parms._build_tree_one_node);
+      for( int k=0; k<_nclass; k++)
+        if( ss[k] != null ) ss[k].getResult();
+      Log.debug("Sampling took: + " + t_1);
+
       // ----
       // ESL2, page 387.  Step 2b ii.
       // One Big Loop till the ktrees are of proper depth.
       // Adds a layer to the trees each pass.
-      growTrees(ktrees, leafs);
+      growTrees(ktrees, leafs, _mtry, _parms._sample_rate, rand);
 
       // ----
       // ESL2, page 387.  Step 2b iii.  Compute the gammas (leaf node predictions === fit best constant), and store them back
@@ -412,7 +437,7 @@ public class GBM extends SharedTree<GBMModel,GBMModel.GBMParameters,GBMModel.GBM
       _model._output.addKTrees(ktrees);
     }
 
-    private void growTrees(DTree[] ktrees, int[] leafs) {
+    private void growTrees(DTree[] ktrees, int[] leafs, int mtrys, float sample_rate, Random rand) {
       // Initial set of histograms.  All trees; one leaf per tree (the root
       // leaf); all columns
       DHistogram hcs[][][] = new DHistogram[_nclass][1/*just root leaf*/][_ncols];
@@ -420,12 +445,13 @@ public class GBM extends SharedTree<GBMModel,GBMModel.GBMParameters,GBMModel.GBM
       // Adjust real bins for the top-levels
       int adj_nbins = Math.max(_parms._nbins_top_level,_parms._nbins);
 
+      long rseed = rand.nextLong();
       // initialize trees
       for (int k = 0; k < _nclass; k++) {
         // Initially setup as-if an empty-split had just happened
         if (_model._output._distribution[k] != 0) {
           if (k == 1 && _nclass == 2) continue; // Boolean Optimization (only one tree needed for 2-class problems)
-          ktrees[k] = new DTree(_train._names, _ncols, (char) _parms._nbins, (char) _parms._nbins_cats, (char) _nclass, _parms._min_rows);
+          ktrees[k] = new DTree(_train, _ncols, (char)_parms._nbins, (char)_parms._nbins_cats, (char)_nclass, _parms._min_rows, mtrys, rseed);
           new GBMUndecidedNode(ktrees[k], -1, DHistogram.initialHist(_train, _ncols, adj_nbins, _parms._nbins_cats, hcs[k][0])); // The "root" node
         }
       }

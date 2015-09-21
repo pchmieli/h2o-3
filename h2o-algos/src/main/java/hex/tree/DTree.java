@@ -2,6 +2,7 @@ package hex.tree;
 
 import water.*;
 import water.fvec.Chunk;
+import water.fvec.Frame;
 import water.util.*;
 
 import java.util.*;
@@ -35,10 +36,24 @@ public class DTree extends Iced {
   // Public stats about tree
   public int _leaves;
   public int _depth;
+  public final int _mtrys;           // Number of columns to choose amongst in splits
+  final long _seeds[];        // One seed for each chunk, for sampling
+  public final transient Random _rand; // RNG for split decisions & sampling
 
-  public DTree( String[] names, int ncols, char nbins, char nbins_cats, char nclass, double min_rows ) { this(names,ncols,nbins,nbins_cats,nclass,min_rows,-1); }
-  public DTree( String[] names, int ncols, char nbins, char nbins_cats, char nclass, double min_rows, long seed ) {
-    _names = names; _ncols = ncols; _nbins=nbins; _nbins_cats=nbins_cats; _nclass=nclass; _min_rows = min_rows; _ns = new Node[1]; _seed = seed;
+  public DTree( Frame fr, int ncols, char nbins, char nbins_cats, char nclass, double min_rows ) { this(fr,ncols,nbins,nbins_cats,nclass,min_rows,-1,-1); }
+  public DTree( Frame fr, int ncols, char nbins, char nbins_cats, char nclass, double min_rows, int mtrys, long seed ) {
+    _names = fr.names(); _ncols = ncols; _nbins=nbins; _nbins_cats=nbins_cats; _nclass=nclass; _min_rows = min_rows; _ns = new Node[1]; _seed = seed;
+    _mtrys = mtrys;
+    _rand = SharedTree.createRNG(seed);
+    _seeds = new long[fr.vecs()[0].nChunks()];
+    for (int i = 0; i < _seeds.length; i++)
+      _seeds[i] = _rand.nextLong();
+  }
+
+  // Return a deterministic chunk-local RNG.  Can be kinda expensive.
+  public Random rngForChunk(int cidx) {
+    long seed = _seeds[cidx];
+    return SharedTree.createRNG(seed);
   }
 
   public final Node root() { return _ns[0]; }

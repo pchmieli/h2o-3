@@ -28,7 +28,6 @@ import static hex.tree.drf.TreeMeasuresCollector.asVotes;
  *  Based on "Elements of Statistical Learning, Second Edition, page 387"
  */
 public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel.DRFParameters, hex.tree.drf.DRFModel.DRFOutput> {
-  protected int _mtry;
 
   @Override public ModelCategory[] can_build() {
     return new ModelCategory[]{
@@ -83,28 +82,6 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
       error("_offset_column", "Offsets are not yet supported for DRF.");
     if (hasOffsetCol() && isClassifier()) {
       error("_offset_column", "Offset is only supported for regression.");
-    }
-  }
-
-  // A standard DTree with a few more bits.  Support for sampling during
-  // training, and replaying the sample later on the identical dataset to
-  // e.g. compute OOBEE.
-  static class DRFTree extends DTree {
-    final int _mtrys;           // Number of columns to choose amongst in splits
-    final long _seeds[];        // One seed for each chunk, for sampling
-    final transient Random _rand; // RNG for split decisions & sampling
-    DRFTree( Frame fr, int ncols, char nbins, char nbins_cats, char nclass, double min_rows, int mtrys, long seed ) {
-      super(fr._names, ncols, nbins, nbins_cats, nclass, min_rows, seed);
-      _mtrys = mtrys;
-      _rand = createRNG(seed);
-      _seeds = new long[fr.vecs()[0].nChunks()];
-      for( int i=0; i<_seeds.length; i++ )
-        _seeds[i] = _rand.nextLong();
-    }
-    // Return a deterministic chunk-local RNG.  Can be kinda expensive.
-    public Random rngForChunk( int cidx ) {
-      long seed = _seeds[cidx];
-      return createRNG(seed);
     }
   }
 
@@ -212,7 +189,7 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
         // TODO: parallelize more? build more than k trees at each time, we need to care about temporary data
         // Idea: launch more DRF at once.
         Timer kb_timer = new Timer();
-        buildNextKTrees(_train,_mtry,_parms._sample_rate,rand,tid);
+        buildNextKTrees(_train,_mtry,_parms._sample_rate,rand);
         Log.info((tid+1) + ". tree was built " + kb_timer.toString());
         DRF.this.update(1);
         if( !isRunning() ) return; // If canceled during building, do not bulkscore
@@ -225,7 +202,7 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
 
     // --------------------------------------------------------------------------
     // Build the next random k-trees representing tid-th tree
-    private void buildNextKTrees(Frame fr, int mtrys, float sample_rate, Random rand, int tid) {
+    private void buildNextKTrees(Frame fr, int mtrys, float sample_rate, Random rand) {
       // We're going to build K (nclass) trees - each focused on correcting
       // errors for a single class.
       final DTree[] ktrees = new DTree[_nclass];
@@ -248,7 +225,7 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
           // This optimization assumes the 2nd tree of a 2-class system is the
           // inverse of the first (and that the same columns were picked)
           if( k==1 && _nclass==2 && _model.binomialOpt()) continue;
-          ktrees[k] = new DRFTree(fr, _ncols, (char)_parms._nbins, (char)_parms._nbins_cats, (char)_nclass, _parms._min_rows, mtrys, rseed);
+          ktrees[k] = new DTree(fr, _ncols, (char)_parms._nbins, (char)_parms._nbins_cats, (char)_nclass, _parms._min_rows, mtrys, rseed);
           new DRFUndecidedNode(ktrees[k], -1, DHistogram.initialHist(fr, _ncols, adj_nbins, _parms._nbins_cats, hcs[k][0])); // The "root" node
         }
       }
@@ -257,7 +234,7 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
       Timer t_1 = new Timer();
       Sample ss[] = new Sample[_nclass];
       for( int k=0; k<_nclass; k++)
-        if (ktrees[k] != null) ss[k] = new Sample((DRFTree)ktrees[k], sample_rate).dfork(0,new Frame(vec_nids(fr,k),vec_resp(fr)), _parms._build_tree_one_node);
+        if (ktrees[k] != null) ss[k] = new Sample(ktrees[k], sample_rate).dfork(0,new Frame(vec_nids(fr,k),vec_resp(fr)), _parms._build_tree_one_node);
       for( int k=0; k<_nclass; k++)
         if( ss[k] != null ) ss[k].getResult();
       Log.debug("Sampling took: + " + t_1);
@@ -445,7 +422,7 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
     DRFUndecidedNode( DTree tree, int pid, DHistogram hs[] ) { super(tree,pid,hs); }
     // Randomly select mtry columns to 'score' in following pass over the data.
     @Override public int[] scoreCols( DHistogram[] hs ) {
-      DRFTree tree = (DRFTree)_tree;
+      DTree tree = _tree;
       int[] cols = new int[hs.length];
       int len=0;
       // Gather all active columns to choose from.
@@ -478,20 +455,6 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
     // single class, or else the full distribution.
     @Override protected AutoBuffer compress(AutoBuffer ab) { assert !Double.isNaN(_pred); return ab.put4f(_pred); }
     @Override protected int size() { return 4; }
-  }
-
-  // Deterministic sampling
-  static class Sample extends MRTask<Sample> {
-    final DRFTree _tree;
-    final float _rate;
-    Sample( DRFTree tree, float rate ) { _tree = tree; _rate = rate; }
-    @Override public void map( Chunk nids, Chunk ys ) {
-      Random rand = _tree.rngForChunk(nids.cidx());
-      for( int row=0; row<nids._len; row++ )
-        if( rand.nextFloat() >= _rate || Double.isNaN(ys.atd(row)) ) {
-          nids.set(row, ScoreBuildHistogram.OUT_OF_BAG);     // Flag row as being ignored by sampling
-        }
-    }
   }
 
   // Read the 'tree' columns, do model-specific math and put the results in the

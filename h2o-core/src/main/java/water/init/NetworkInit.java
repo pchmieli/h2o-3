@@ -1,5 +1,6 @@
 package water.init;
 
+import water.AuthConfig;
 import water.H2O;
 import water.H2ONode;
 import water.JettyHTTPD;
@@ -163,7 +164,7 @@ public class NetworkInit {
         Log.warn("Failed to determine IP, falling back to localhost.");
         // set default ip address to be 127.0.0.1 /localhost
         local = InetAddress.getByName("127.0.0.1");
-      } catch( UnknownHostException e ) { 
+      } catch( UnknownHostException e ) {
         Log.throwErr(e);
       }
     }
@@ -319,7 +320,11 @@ public class NetworkInit {
 
     // Late instantiation of Jetty object, if needed.
     if (H2O.getJetty() == null) {
-      H2O.setJetty(new JettyHTTPD());
+      JettyHTTPD jettyHTTPD = new JettyHTTPD();
+      if (H2O.ARGS.web_username != null && H2O.ARGS.web_password != null) {
+        jettyHTTPD.setAuthConfig(new AuthConfig(H2O.ARGS.web_username, H2O.ARGS.web_password));
+      }
+      H2O.setJetty(jettyHTTPD);
     }
 
     while (true) {
@@ -394,7 +399,7 @@ public class NetworkInit {
     // Read a flatfile of allowed nodes
     if (embeddedConfigFlatfile != null)
       H2O.STATIC_H2OS = parseFlatFileFromString(embeddedConfigFlatfile);
-    else 
+    else
       H2O.STATIC_H2OS = parseFlatFile(H2O.ARGS.flatfile);
 
     // Multi-cast ports are in the range E1.00.00.00 to EF.FF.FF.FF
@@ -582,7 +587,7 @@ public class NetworkInit {
         list.add(entry);
       }
     } catch( Exception e ) { H2O.die(e.toString()); }
-    finally { 
+    finally {
       if( br != null ) try { br.close(); } catch( IOException ie ) { }
     }
     return list;

@@ -60,8 +60,8 @@ class RollupStats extends Iced {
   private boolean isReady() { return _naCnt>=0; }
 
   private RollupStats(int mode) {
-    _mins = new double[5];  Arrays.fill(_mins, Double.NaN);
-    _maxs = new double[5];  Arrays.fill(_maxs, Double.NaN);
+    _mins = new double[5];  Arrays.fill(_mins, Double.MAX_VALUE);
+    _maxs = new double[5];  Arrays.fill(_maxs, -Double.MAX_VALUE);
     _pctiles = new double[Vec.PERCENTILES.length];  Arrays.fill(_pctiles, Double.NaN);
     _mean = _sigma = Double.NaN;
     _size = 0;
@@ -223,15 +223,25 @@ class RollupStats extends Iced {
 
   private void min( double d ) {
     if( d >= _mins[_mins.length-1] ) return;
-    for( int i=0; i<_mins.length; i++ )
-      if( d < _mins[i] )
-        { double tmp = _mins[i];  _mins[i] = d;  d = tmp; }
+    for( int i=0; i<_mins.length; i++ ) {
+      if (d == _mins[i]) return;
+      if (d < _mins[i]) {
+        double tmp = _mins[i];
+        _mins[i] = d;
+        d = tmp;
+      }
+    }
   }
   private void max( double d ) {
     if( d <= _maxs[_maxs.length-1] ) return;
-    for( int i=0; i<_maxs.length; i++ )
-      if( d > _maxs[i] )
-        { double tmp = _maxs[i];  _maxs[i] = d;  d = tmp; }
+    for( int i=0; i<_maxs.length; i++ ) {
+      if (d == _maxs[i]) return;
+      if (d > _maxs[i]) {
+        double tmp = _maxs[i];
+        _maxs[i] = d;
+        d = tmp;
+      }
+    }
   }
 
   private static class Roll extends MRTask<Roll> {

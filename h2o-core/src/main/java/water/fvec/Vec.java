@@ -6,9 +6,7 @@ import water.parser.Categorical;
 import water.parser.ValueString;
 import water.util.*;
 
-import java.util.Arrays;
-import java.util.Random;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.Future;
 
 /** A distributed vector/array/column of uniform data.
@@ -190,6 +188,8 @@ public class Vec extends Keyed<Vec> {
   public static final boolean DO_HISTOGRAMS = true;
   final private Key _rollupStatsKey;
 
+  public enum Uniques { ONE, TWO, THREE, FOUR, FIVE, MANY, UNKNOWN }
+
   /** True if this is an Categorical column.  All enum columns are also {@link #isInt}, but
    *  not vice-versa.
    *  @return true if this is an Categorical column.  */
@@ -281,10 +281,53 @@ public class Vec extends Keyed<Vec> {
   /** Get the column type. */
   public byte get_type() { return _type; }
   public String get_type_str() { return TYPE_STR[_type]; }
-
+  /** Check if the Vec contains only values of 0 and 1 */
   public boolean isBinary(){
     RollupStats rs = rollupStats();
     return rs._isInt && rs._mins[0] == 0 && rs._maxs[0] == 1;
+  }
+  /** Return the number of unique values in this Vec - can be unknown (i.e., unimplemented) */
+  public Uniques numUniques() {
+    Uniques ret = Uniques.UNKNOWN;
+    int N=-1;
+    if (isEnum())
+      N = _domain.length;
+    else if (isBinary())
+      N = 2;
+    else if (isConst())
+      N = 1;
+    else if (isInt() || isNumeric()) {
+      // check for up to 5 uniques
+      RollupStats rs = rollupStats();
+      double[] mi = rs._mins;
+      double[] ma = rs._maxs;
+      Set<Double> mil = new HashSet();
+      Set<Double> mal = new HashSet();
+      // Find unique values (except for dummy filler values - Note: Cannot distinguish between filler NaN and actual NaN)
+      for (double d : mi) if (!Double.isNaN(d) && d != Double.MAX_VALUE)   mil.add(d);
+      for (double d : ma) if (!Double.isNaN(d) && d != -Double.MAX_VALUE)  mal.add(d);
+      Set<Double> uniques = new HashSet();
+      uniques.addAll(mil);
+      uniques.addAll(mal);
+      N = uniques.size();
+      if (N > 5)
+        ret = Uniques.MANY;
+    }
+    switch(N) {
+      case 1:
+        return Uniques.ONE;
+      case 2:
+        return Uniques.TWO;
+      case 3:
+        return Uniques.THREE;
+      case 4:
+        return Uniques.FOUR;
+      case 5:
+        return Uniques.FIVE;
+      default:
+        if (N>5) return Uniques.MANY;
+        else return ret;
+    }
   }
 
   private void setMeta( byte type, String[] domain) {

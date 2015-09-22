@@ -18,7 +18,7 @@ public class VecTest extends TestUtil {
   @Test public void testToEnum() {
     testToEnumDomainMatch(vec(0,1,0,1), ar("0", "1") );
     testToEnumDomainMatch(vec(1,2,3,4,5,6,7), ar("1", "2", "3", "4", "5", "6", "7") );
-    testToEnumDomainMatch(vec(0,1,2,99,4,5,6), ar("0", "1", "2", "4", "5", "6", "99") );
+    testToEnumDomainMatch(vec(0, 1, 2, 99, 4, 5, 6), ar("0", "1", "2", "4", "5", "6", "99"));
   }
 
   private void testToEnumDomainMatch(Vec f, String[] expectedDomain) {
@@ -30,6 +30,40 @@ public class VecTest extends TestUtil {
     } finally {
       if( f !=null ) f .remove();
       if( ef!=null ) ef.remove();
+    }
+  }
+
+  @Test public void testUniques() {
+    testUniques(vec(1,1,1,1,1), Vec.Uniques.ONE);
+    testUniques(vec(new String[]{"T","F"},1,0,0,0,0,1,1,1,0,0,0), Vec.Uniques.TWO);
+    testUniques(vec(new String[]{"T","F"},1,-3,-3,-3,1,1,1,1,-3,-3), Vec.Uniques.TWO);
+    testUniques(vec(new String[]{"T","F"},1,-1,-1,-1,1,1,1,1,-1,-1), Vec.Uniques.TWO);
+    testUniques(vec(Math.PI,Math.PI,Math.PI), Vec.Uniques.ONE);
+    testUniques(vec(0,0,0,0,0,1,1,0,1), Vec.Uniques.TWO);
+    testUniques(vec(-Math.PI,1,4), Vec.Uniques.THREE);
+    testUniques(vec(0,1,1,0,1), Vec.Uniques.TWO);
+    testUniques(vec(-Math.PI,1.34,4.2,5.3,5.3,5.3,-Math.PI), Vec.Uniques.FOUR);
+    testUniques(vec(2,1,1,0,1), Vec.Uniques.THREE);
+    testUniques(vec(2,0,1), Vec.Uniques.THREE);
+    testUniques(vec(Double.MAX_VALUE,1,1,0,1), Vec.Uniques.THREE);
+    testUniques(vec(-Double.MAX_VALUE,Double.MAX_VALUE,1,1,1), Vec.Uniques.THREE);
+    testUniques(vec(-Double.MAX_VALUE,Double.MAX_VALUE,1,2,3), Vec.Uniques.FIVE);
+    testUniques(vec(5,-Double.MAX_VALUE,Double.MAX_VALUE,1,2,3), Vec.Uniques.MANY);
+    testUniques(vec(5,7,8,2,2,2,2,3), Vec.Uniques.FIVE);
+    testUniques(vec(5,7,8,1,2,3,7,8,7), Vec.Uniques.MANY);
+    testUniques(vec(-1,1,1,1,1,1,1,1,-1,-1), Vec.Uniques.TWO);
+    testUniques(vec(12,12,12,12,12,0,0), Vec.Uniques.TWO);
+    testUniques(vec(0,12,0,0,0,0,0,0,0), Vec.Uniques.TWO);
+    testUniques(vec(1,3,2,5,5,2,3,1,1,1,3,5,5,5,3,2,1), Vec.Uniques.FOUR);
+    testUniques(vec(Double.NaN,0,1), Vec.Uniques.TWO); //NA is not counted
+    testUniques(vec(Double.NaN,0,1,1,1,1,1,0,0,0,0), Vec.Uniques.TWO); //NA is not counted
+    testUniques(vec(new String[]{"a","b","c","d","e"}, 1,3,2,4,5,2,3,1,1,1,3,5,5,5,3,2,1), Vec.Uniques.FIVE);
+  }
+  private void testUniques(Vec f, Vec.Uniques expectedUniques) {
+    try {
+      Assert.assertEquals("Wrong uniques!", expectedUniques, f.numUniques());
+    } finally {
+      if( f !=null ) f .remove();
     }
   }
 

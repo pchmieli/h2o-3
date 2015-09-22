@@ -166,6 +166,20 @@ public class TestUtil extends Iced {
     return ParseDataset.parse(Key.make(), res);
   }
 
+  /** A Numeric Vec from an array of doubles
+   *  @param rows Data
+   *  @return The Vec  */
+  public static Vec vec(double ...rows) {
+    Key k = Vec.VectorGroup.VG_LEN1.addVec();
+    Futures fs = new Futures();
+    AppendableVec avec = new AppendableVec(k);
+    NewChunk chunk = new NewChunk(avec, 0);
+    for( double r : rows ) chunk.addNum(r);
+    chunk.close(0, fs);
+    Vec vec = avec.close(fs);
+    fs.blockForPending();
+    return vec;
+  }
   /** A Numeric Vec from an array of ints
    *  @param rows Data
    *  @return The Vec  */

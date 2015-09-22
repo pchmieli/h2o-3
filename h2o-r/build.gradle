@@ -196,7 +196,7 @@ cpH2OAppJar.dependsOn setProperties
 setPackageFiles.dependsOn cpH2OAppJar
 buildPackageDocumentation.dependsOn setPackageFiles
 genPDF.dependsOn setPackageFiles
-genPDF.dependsOn buildPackageDocumentation
+//genPDF.dependsOn buildPackageDocumentation
 cpPDF.dependsOn genPDF
 buildPKG.dependsOn cpPDF
 cpToR.dependsOn buildPKG
